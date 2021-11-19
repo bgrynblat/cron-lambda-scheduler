@@ -1,0 +1,9 @@
+version: "3.9"
+services:
+  scheduler:
+    restart: always
+    ports:
+      - "8080:3131"
+    build: .
+    env_file:
+      - .env

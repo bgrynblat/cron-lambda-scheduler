@@ -36,7 +36,7 @@ const executeJob = (req, in_ms = 0) => {
   const [job, json] = checkJob(req.query)
   let fn
   if(REMOTE_LAMBDA) {
-    fn = () => callLambda(job, json, lambdaFunctionName = AWS_LAMBDA_DEFAULT_FUNCTION)
+    fn = () => callLambda(job, json, /* Can specify the function if we want to */)
   } else {
     fn = () => axios({
       method: 'POST',
