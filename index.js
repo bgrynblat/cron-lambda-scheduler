@@ -1,6 +1,9 @@
 const express = require('express')
 const axios = require('axios')
 const cron = require('node-cron')
+const { v4: uuid } = require('uuid');
+
+const { getRules, createRule, deleteRule, callLambda } = require('./aws')
 
 const app = express()
 const port = process.env.PORT || 3131
@@ -16,32 +19,43 @@ const lambdaProxy = process.env.LAMBDA_PROXY || `${lambdaProtocol}://${lambdaHos
 app.use(express.urlencoded({ extended: false }))
 app.use(express.json())
 
+const checkJob = ({job, args}) => {
+  if(!job)      throw new Error("Missing 'job' parameter")
+  else if(!args)  args = []
+  let json
+  try {
+    json = JSON.parse(args)
+  } catch(err) {
+    throw new Error("Invalid 'args' parameter")
+  }
+  return [job, json]
+}
+
 /* Functions */
 const executeJob = (req, in_ms = 0) => {
-  const {job, args} = req.query
-  if(!job)      throw new Error("Missing 'job' parameter")
-  else if(!args)  throw new Error("Missing 'args' parameter")
-  console.log(job, args, in_ms)
-
+  const [job, json] = checkJob(req.query)
+  let fn
   if(REMOTE_LAMBDA) {
-    // TODO
+    fn = () => callLambda(job, json, lambdaFunctionName = AWS_LAMBDA_DEFAULT_FUNCTION)
   } else {
-    const request = {
+    fn = () => axios({
       method: 'POST',
       url: lambdaProxy,
       data: {
         job,
-        args: (args || "").split(",")
+        args: json
       }
-    }
-
-    console.log(`Job will execute in ${in_ms}ms (${new Date(Date.now()+in_ms)})...`)
-    setTimeout(() => {
-      axios(request)
-      .then(_ => console.log(`Job executed at ${Date.now()}`))
-      .catch(err => console.log(`Job executed with error at ${Date.now()} (Error:${err.message})`))
-    }, (in_ms || 0))
+    })
   }
+
+  const hash = uuid()
+
+  console.log(`Job ${hash} (${job} ${JSON.stringify(json)}) => in ${in_ms}ms (${new Date(Date.now()+in_ms)})...`)
+  setTimeout(() => {
+    fn()
+    .then(_ => console.log(`Job ${hash} executed at ${Date.now()}`))
+    .catch(err => console.log(`Job ${hash} executed with error at ${Date.now()} (Error:${err.message})`))
+  }, (in_ms || 0))
 }
 
 /* Endpoints */
@@ -106,23 +120,54 @@ app.get('/process_in', (req, res) => {
   }
 })
 
-app.get('/schedule', (req, res) => {
-  const crt = req.query["cron"]
+app.put('/schedule', async (req, res) => {
+  let crt = req.query["cron"]
   if(!crt) return res.status(400).send("Missing 'cron' parameter")
 
   try {
+    const [job, json] = checkJob(req.query)
     if(REMOTE_LAMBDA) {
-      // TODO
+      await createRule(job, json, crt, req.query["description"])
     } else {
       cron.schedule(crt, () => {
         executeJob(req)
       })
-      console.log(`Job scheduled cron:${crt}`)
     }
+    console.log(`Job scheduled: ${job} ${JSON.stringify(json)} cron:${crt}`)
 
     res.send("Success")
   } catch(err) {
     res.status(400).send(err.message)
+  }
+})
+
+app.delete('/schedule', async (req, res) => {
+  let crt = req.query["cron"]
+  if(!crt) return res.status(400).send("Missing 'cron' parameter")
+
+  try {
+    const [job, json] = checkJob(req.query)
+    if(REMOTE_LAMBDA) {
+      await deleteRule(job, json, crt)
+    } else {
+      cron.schedule(crt, () => {
+        executeJob(req)
+      })
+    }
+    console.log(`Job scheduled: ${job} ${JSON.stringify(json)} cron:${crt}`)
+
+    res.send("Success")
+  } catch(err) {
+    res.status(400).send(err.message)
+  }
+})
+
+app.get('/schedule', async (req, res) => {
+  try {
+    const rules = await getRules(null)
+    res.send(rules)
+  } catch(err) {
+    res.status(500).send(err.message)
   }
 })
 
